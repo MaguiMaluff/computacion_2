@@ -65,7 +65,20 @@ Diseña un programa donde se creen dos hijos de manera secuencial: se lanza el p
 
 
 ```python
+import os
+import time
 
+def crear_hijo(nombre):
+    pid = os.fork()
+    if pid == 0:
+        print("Hijo: ", nombre, "PID: ", {os.getpid()})
+        time.sleep(1)
+        os._exit(0)
+    else:
+        os.wait()
+
+crear_hijo("Primero")
+crear_hijo("Segundo")
 
 ```
 
@@ -76,6 +89,22 @@ Crea un programa que genere un proceso hijo que termine inmediatamente, pero el 
 
 
 ```python
+import os
+import sys
+import time
+
+def crear_zombi():
+    pid = os.fork()
+    
+    if pid == 0:
+        print(f"Hijo iniciado (PID: {os.getpid()})")
+        print(f"Hijo terminando")
+        sys.exit(0)
+    else: 
+        time.sleep(30)
+        os.wait()
+
+crear_zombi()
 ```
 
 ---
@@ -85,6 +114,33 @@ Genera un proceso hijo que siga ejecutándose luego de que el padre haya termina
 
 
 ```python
+import os
+import sys
+import time
+
+def crear_huerfano():
+    pid = os.fork()
+    
+    if pid == 0: 
+        print(f"Hijo iniciado (PID: {os.getpid()}, Padre original: {os.getppid()})")
+        time.sleep(5)
+
+        nuevo_ppid = os.getppid()
+
+        if nuevo_ppid == 1 or nuevo_ppid != pid:
+            print("Huerfano!")
+
+        time.sleep(10)
+        print("Hijo huérfano terminando...")
+        sys.exit(0)
+    else:  
+        print(f"Padre (PID: {os.getpid()}) creó un hijo (PID: {pid})")
+        time.sleep(2)
+        print("Padre terminando...")
+        sys.exit(0)
+
+crear_huerfano()
+
 ```
 
 ---
@@ -94,6 +150,16 @@ Construye un programa que cree tres hijos en paralelo (no secuenciales). Cada hi
 
 
 ```python
+import os
+
+for i in range(3):
+    pid = os.fork()
+    if pid == 0:
+        print("Hijo: ", i , "PID: ", {os.getpid()} , "Padre: " ,{os.getppid()})
+        os._exit(0)
+
+for _ in range(3):
+    os.wait()
 ```
 
 ---
@@ -103,6 +169,16 @@ Imita el comportamiento de un servidor concurrente que atiende múltiples client
 
 
 ```python
+import os
+
+for i in range(3):
+    pid = os.fork()
+    if pid == 0:
+        print("Hijo: ", i , "PID: ", {os.getpid()} , "Padre: " ,{os.getppid()},'\n')
+        os._exit(0)
+
+for _ in range(3):
+    os.wait()
 ```
 
 ---
@@ -112,6 +188,25 @@ Escribe un script que recorra `/proc` y detecte procesos en estado zombi, listan
 
 
 ```python
+
+import os
+
+def detectar_zombis():
+    for pid in os.listdir('/proc'):
+        if pid.isdigit():
+            try:
+                with open(f"/proc/{pid}/status") as f:
+                    lines = f.readlines()
+                    estado = next((l for l in lines if l.startswith("State:")), "")
+                    if "Z" in estado:
+                        nombre = next((l for l in lines if l.startswith("Name:")), "").split()[1]
+                        ppid = next((l for l in lines if l.startswith("PPid:")), "").split()[1]
+                        print(f"Zombi detectado → PID: {pid}, PPID: {ppid}, Nombre: {nombre}")
+            except IOError:
+                continue
+
+detectar_zombis()
+
 ```
 
 ---
@@ -121,4 +216,21 @@ Simula un escenario donde un proceso huérfano ejecuta un comando externo sin co
 
 
 ```python
+
+import os
+import subprocess
+import time
+
+def simular_proceso_huerfano():
+    pid = os.fork()
+    if pid > 0:
+        print(f"Proceso padre ({os.getpid()}) terminando y dejando huérfano a {pid}")
+        exit()
+    else:
+        time.sleep(2)
+        print(f"Proceso huérfano ({os.getpid()}) ejecutando un comando externo...")
+        subprocess.run(["/bin/echo", "Comando ejecutado por proceso huérfano"]) 
+
+simular_proceso_huerfano()
+
 ```
