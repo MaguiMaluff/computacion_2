@@ -45,37 +45,80 @@ for _ in range(2):
 ### Ejercicio 3: Reemplazo de un proceso hijo con `exec()`
 Haz que un proceso hijo reemplace su contexto de ejecución con un programa del sistema, por ejemplo, el comando `ls -l`, utilizando `exec()`.
 
+```python
+import os
+
+pid = os.fork()
+
+if pid == 0:
+    print("Soy el proceso hijo")
+    os.execlp("ls", "ls", "-l")
+    print("no") #No se ejecutara
+
+
+```
+
 ---
 
 ### Ejercicio 4: Secuencia controlada de procesos
 Diseña un programa donde se creen dos hijos de manera secuencial: se lanza el primero, se espera a que finalice, y luego se lanza el segundo. Cada hijo debe realizar una tarea mínima.
+
+
+```python
+
+
+```
 
 ---
 
 ### Ejercicio 5: Proceso zombi temporal
 Crea un programa que genere un proceso hijo que termine inmediatamente, pero el padre no debe recoger su estado de salida durante algunos segundos. Observa su estado como zombi con herramientas del sistema.
 
+
+```python
+```
+
 ---
 
 ### Ejercicio 6: Proceso huérfano adoptado por `init`
 Genera un proceso hijo que siga ejecutándose luego de que el padre haya terminado. Verifica que su nuevo PPID corresponda al proceso `init` o `systemd`.
+
+
+```python
+```
 
 ---
 
 ### Ejercicio 7: Multiproceso paralelo
 Construye un programa que cree tres hijos en paralelo (no secuenciales). Cada hijo ejecutará una tarea breve y luego finalizará. El padre debe esperar por todos ellos.
 
+
+```python
+```
+
 ---
 
 ### Ejercicio 8: Simulación de servidor multiproceso
 Imita el comportamiento de un servidor concurrente que atiende múltiples clientes creando un proceso hijo por cada uno. Cada proceso debe simular la atención a un cliente con un `sleep()`.
+
+
+```python
+```
 
 ---
 
 ### Ejercicio 9: Detección de procesos zombis en el sistema
 Escribe un script que recorra `/proc` y detecte procesos en estado zombi, listando su PID, PPID y nombre del ejecutable. Este ejercicio debe realizarse sin utilizar `ps`.
 
+
+```python
+```
+
 ---
 
 ### Ejercicio 10: Inyección de comandos en procesos huérfanos (Análisis de riesgo)
 Simula un escenario donde un proceso huérfano ejecuta un comando externo sin control del padre. Analiza qué implicaciones tendría esto en términos de seguridad o evasión de auditorías.
+
+
+```python
+```
