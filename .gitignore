@@ -1,3 +1,7 @@
-/Clases/Clase_2/Ejercicios/jojoj.py
-jojoj.py
 env
+/pycache
+pycache
+__pycache__
+/__pycache__
+TP_1/__pycache__/
+**/__pycache__/
