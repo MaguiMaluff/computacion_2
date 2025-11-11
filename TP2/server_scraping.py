@@ -201,5 +201,62 @@ def main():
     web.run_app(app, host=args.ip, port=args.port)
 
 
+# A continuación está la implementación consolidada de `scrape_worker`.
+async def scrape_worker(url: str, session: aiohttp.ClientSession, timeout: int) -> Dict[str, Any]:
+    """
+    Realiza un GET asíncrono a `url` y usa parse_html_basic para extraer scraping_data.
+    Mapea errores de red a excepciones HTTP precisas (400, 502, 504) que aiohttp
+    interpretará y enviará al cliente como respuestas con JSON.
+    """
+    try:
+        # Abrimos la petición usando la session compartida y aplicamos timeout global.
+        # El `async with` garantiza que la respuesta se cierre/retorne al pool.
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            # Levanta ClientResponseError si el status es 4xx/5xx
+            resp.raise_for_status()
+
+            if resp.content_length and resp.content_length > 5 * 1024 * 1024:  # > 5 MB
+                raise web.HTTPRequestEntityTooLarge(
+                    text=json.dumps({
+                        "error": f"El contenido es demasiado grande ({resp.content_length} bytes)"
+                    }),
+                    content_type='application/json'
+                )
+
+            # Leer el cuerpo de forma asíncrona (no bloqueante).
+            html = await resp.text()
+
+    # Mapeos de excepciones frecuentes a respuestas HTTP con JSON explicativo:
+    except asyncio.TimeoutError:
+        # Timeout de la operación de red
+        raise web.HTTPGatewayTimeout(
+            text=json.dumps({"error": "Timeout mientras se conectaba al servidor"}),
+            content_type="application/json",
+        )
+    except aiohttp.ClientConnectorError as e:
+        # Error al conectar (host inaccesible / conexión rechazada)
+        raise web.HTTPBadGateway(
+            text=json.dumps({"error": f"Conexión rechazada o fallida: {str(e)}"}),
+            content_type="application/json",
+        )
+    except aiohttp.ClientResponseError as e:
+        # El servidor remoto devolvió un status 4xx/5xx
+        status = e.status
+        raise web.HTTPBadRequest(
+            text=json.dumps({"error": f"Error HTTP recibido del servidor: {status}"}),
+            content_type="application/json",
+        )
+    except Exception as e:
+        # Cualquier otro error se mapea a 400 con mensaje minimalista
+        raise web.HTTPBadRequest(
+            text=json.dumps({"error": f"Fallo inesperado: {str(e)}"}),
+            content_type="application/json",
+        )
+
+    # Si llegamos acá, tenemos el HTML; parse_html_basic extrae título, links, meta, headers, count imágenes.
+    # Usamos str(resp.url) para resolver URLs relativas y reflejar redirecciones.
+    scraping_data = parse_html_basic(html, base_url=str(resp.url))
+    return scraping_data
+
 if __name__ == "__main__":
     main()
