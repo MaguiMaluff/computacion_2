@@ -7,3 +7,6 @@ aiofiles
 pytest
 pytest-asyncio
 pytest-aiohttp
+selenium
+requests
+webdriver_manager
