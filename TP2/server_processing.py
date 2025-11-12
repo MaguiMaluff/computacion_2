@@ -61,8 +61,11 @@ def capture_screenshot_selenium(url, timeout_s=30):
     """Devuelve bytes PNG usando Selenium con Chrome en modo headless mediante webdriver-manager."""
     opts = ChromeOptions()
     # Opciones para headless y entorno sin sandbox (útiles en Docker)
-    # Usamos la opción --headless estándar; si su versión de Chrome soporta --headless=new, no hay problema
-    opts.add_argument("--headless")
+    # Añadimos opciones que suelen funcionar en distintos entornos.
+    try:
+        opts.add_argument("--headless=new")
+    except Exception:
+        opts.add_argument("--headless")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
@@ -118,7 +121,7 @@ def process_task(payload):
                 font = ImageFont.load_default()
             except Exception:
                 font = None
-            d.text((10, 10), f"Screenshot placeholder for {url}", fill=(0, 0, 0), font=font)
+            d.text((10, 10), f"Captura (placeholder) para {url}", fill=(0, 0, 0), font=font)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             screenshot_bytes = buf.getvalue()
