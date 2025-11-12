@@ -6,6 +6,8 @@ import importlib
 import sys
 import pytest
 from aiohttp import web
+import os
+import aiohttp
 
 # Helper para cargar un módulo desde un path (evita problemas de paquetes)
 def load_module_from_path(name: str, path: pathlib.Path):
@@ -102,3 +104,27 @@ async def test_handle_scrape_endpoint_success(aiohttp_client, monkeypatch):
     assert resp2.status == 400
     txt = await resp2.text()
     assert "missing url" in txt or "error" in txt.lower()
+
+# La prueba asume que server_scraping.py está en ejecución en host:port
+HOST = os.environ.get("SCRAPER_HOST", "127.0.0.1")
+PORT = int(os.environ.get("SCRAPER_PORT", "8000"))
+URL = f"http://{HOST}:{PORT}/scrape?url=https://example.com"
+
+@pytest.mark.asyncio
+async def test_scraper_returns_expected_structure():
+    timeout = aiohttp.ClientTimeout(total=40)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(URL) as resp:
+            assert resp.status in (200, 502, 504, 500)
+            data = await resp.json()
+    # Comprobaciones básicas: existen claves esperadas
+    assert "url" in data
+    assert "timestamp" in data
+    assert "scraping_data" in data
+    # scraping_data debe contener title y links
+    sd = data.get("scraping_data") or {}
+    assert isinstance(sd, dict)
+    assert "title" in sd
+    assert "links" in sd
+    # debe estar presente status
+    assert "status" in data

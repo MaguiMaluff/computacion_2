@@ -3,7 +3,7 @@
 Servidor de Scraping Web Asíncrono (Parte A)
 
 Uso:
-  python3 TP2/server_scraping.py -i 0.0.0.0 -p 8000 -w 8 --process-host localhost --process-port 9001
+  python3 server_scraping.py -i 0.0.0.0 -p 8000 -w 8 --process-host localhost --process-port 9001
 
 Este archivo expone un servidor HTTP (aiohttp) que:
 - recibe una URL por query param (?url=...)
@@ -16,11 +16,19 @@ Este archivo expone un servidor HTTP (aiohttp) que:
 import argparse            # parsing de línea de comandos
 import asyncio             # primitives de concurrencia (event loop, Semaphore, etc.)
 import json                # serializar / deserializar payloads JSON
+import struct
 from datetime import datetime
+import os
 from typing import Dict, Any, Optional
+from urllib.parse import urljoin, urlparse
+import socket
+import ssl
+import asyncio
+import math
 
 import aiohttp             # cliente HTTP asíncrono y utilidades
 from aiohttp import web    # framework web asíncrono (handlers, respuestas)
+from bs4 import BeautifulSoup
 
 # funciones locales modulares: parsing HTML y protocolo de comunicación con B
 from scraper.html_parser import parse_html_basic
@@ -30,38 +38,77 @@ from common.protocol import send_request_and_receive_json
 DEFAULT_WORKERS = 4
 DEFAULT_TIMEOUT = 30  # segundos. Limita cuánto esperamos por una página
 
-# Función que realiza la petición HTTP y parsea el HTML
-async def scrape_worker(url: str, session: aiohttp.ClientSession, timeout: int) -> Dict[str, Any]:
-    """
-    Realiza un GET asíncrono a `url` usando la ClientSession compartida `session`.
-    - Usa `async with` para asegurar liberación correcta del objeto Response.
-    - Aplica un timeout (ClientTimeout) para evitar bloquear el event loop indefinidamente.
-    - Valida el status con resp.raise_for_status() (lanza excepción si 4xx/5xx).
-    - Lee el cuerpo con await resp.text() (operación I/O no bloqueante).
-    - Pasa el HTML a parse_html_basic para obtener el diccionario de scraping.
-    - En caso de errores de fetch/parsing lanza una excepción HTTP (400) con JSON.
-    """
-    try:
-        # `async with session.get(...) as resp`:
-        # - mantiene la conexión en el pool mientras se trabaja con la respuesta
-        # - garantiza que la conexión se cierra / retorna al pool aun en caso de excepción
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-            # Si el servidor respondió 4xx/5xx, raise_for_status lanza ClientResponseError
-            resp.raise_for_status()
-            # Leer el cuerpo de forma asíncrona; permite que el event loop atienda otras tareas
-            html = await resp.text()
-    except Exception as e:
-        # Capturamos cualquier excepción de la fase de fetch/lectura y la mapeamos
-        # a una excepción HTTP comprensible por el cliente (aquí usamos 400).
-        raise web.HTTPBadRequest(
-            text=json.dumps({"error": f"fetch_error: {str(e)}"}),
-            content_type='application/json'
-        )
+PROCESSOR_HOST = os.environ.get("PROC_HOST", "127.0.0.1")
+PROCESSOR_PORT = int(os.environ.get("PROC_PORT", "9001"))
 
-    # parse_html_basic realiza extracción de título, links, meta tags, headers y cantidad de imágenes
-    # Le pasamos base_url=str(resp.url) para resolver links relativos (y para respetar redirecciones).
-    scraping_data = parse_html_basic(html, base_url=str(resp.url))
-    return scraping_data
+# Nuevo: valores por defecto del conector y configuración de reintentos
+CONNECTOR_LIMIT = int(os.environ.get("AIO_LIMIT", "100"))
+CONNECTOR_LIMIT_PER_HOST = int(os.environ.get("AIO_LIMIT_PER_HOST", "10"))
+ASK_RETRIES = int(os.environ.get("ASK_RETRIES", "3"))
+ASK_BACKOFF_BASE = float(os.environ.get("ASK_BACKOFF_BASE", "0.5"))
+
+
+async def fetch_html(session, url):
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with session.get(url, timeout=timeout) as resp:
+        text = await resp.text(errors="ignore")
+        return text
+
+
+def extract_data(html, base_url):
+    soup = BeautifulSoup(html, "lxml")
+    title_tag = soup.find("title")
+    title = title_tag.get_text(strip=True) if title_tag else ""
+    links = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        links.append(urljoin(base_url, href))
+    meta = {}
+    for m in soup.find_all("meta"):
+        if m.get("name"):
+            meta[m.get("name")] = m.get("content", "")
+        if m.get("property"):
+            meta[m.get("property")] = m.get("content", "")
+    headers = {}
+    for i in range(1, 7):
+        headers[f"h{i}"] = len(soup.find_all(f"h{i}"))
+    images_count = len(soup.find_all("img"))
+    return {
+        "title": title,
+        "links": links,
+        "meta_tags": meta,
+        "structure": headers,
+        "images_count": images_count,
+    }
+
+
+async def ask_processor(host, port, payload):
+    # Bucle de reintentos con backoff exponencial y manejo amplio de excepciones
+    last_exc = None
+    data = json.dumps(payload).encode("utf-8")
+    for attempt in range(1, ASK_RETRIES + 1):
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            writer.write(struct.pack(">I", len(data)) + data)
+            await writer.drain()
+            raw_len = await reader.readexactly(4)
+            msg_len = struct.unpack(">I", raw_len)[0]
+            data_in = await reader.readexactly(msg_len)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return json.loads(data_in.decode("utf-8"))
+        except (asyncio.IncompleteReadError, ConnectionRefusedError, OSError, asyncio.TimeoutError,
+                socket.gaierror, ssl.SSLError, asyncio.CancelledError) as e:
+            last_exc = e
+            # backoff (no dormir si fue cancelado)
+            if isinstance(e, asyncio.CancelledError):
+                raise
+            await asyncio.sleep(ASK_BACKOFF_BASE * (2 ** (attempt - 1)))
+            continue
+    raise last_exc
 
 
 # Handler HTTP para el endpoint /scrape
@@ -81,19 +128,18 @@ async def handle_scrape(request: web.Request) -> web.Response:
         # Falta parámetro obligatorio: respondemos 400 con JSON explicativo
         raise web.HTTPBadRequest(
             text=json.dumps({"error": "missing url parameter"}),
-            content_type='application/json'
+            content_type="application/json",
         )
 
     # Accedemos al estado compartido de la app
     app = request.app
-    sem: asyncio.Semaphore = app["sem"]                 # controla número concurrente de scrapers
+    sem: asyncio.Semaphore = app["sem"]  # controla número concurrente de scrapers
     session: aiohttp.ClientSession = app["http_session"]  # session compartida (pool de conexiones)
-    timeout = app["timeout"]                            # timeout configurado
-    process_host = app["process_host"]                  # host del Servidor B
-    process_port = app["process_port"]                  # puerto del Servidor B
+    timeout = app["timeout"]  # timeout configurado
+    process_host = app["process_host"]  # host del Servidor B
+    process_port = app["process_port"]  # puerto del Servidor B
 
     # `async with sem` limita cuantas coroutines pueden ejecutar scraping simultáneamente.
-    # Esto protege recursos locales (file descriptors, ancho de banda) y evita saturar destinos.
     async with sem:
         try:
             # Ejecutamos la tarea de scraping. Es awaitable y no bloquea el loop.
@@ -109,7 +155,7 @@ async def handle_scrape(request: web.Request) -> web.Response:
         payload = {
             "url": url,
             "scraping_data": scraping_data,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
         processing_data: Optional[Dict[str, Any]] = None
@@ -128,7 +174,7 @@ async def handle_scrape(request: web.Request) -> web.Response:
             "timestamp": payload["timestamp"],
             "scraping_data": scraping_data,
             "processing_data": processing_data,
-            "status": "success" if not processing_data.get("error") else "partial_failure"
+            "status": "success" if not processing_data.get("error") else "partial_failure",
         }
         # web.json_response serializa a JSON, añade header Content-Type y devuelve una Response.
         return web.json_response(response)
@@ -139,7 +185,7 @@ def create_app(
     process_host: str = "127.0.0.1",
     process_port: int = 9001,
     workers: int = DEFAULT_WORKERS,
-    timeout: int = DEFAULT_TIMEOUT
+    timeout: int = DEFAULT_TIMEOUT,
 ) -> web.Application:
     """
     Crea y configura la aiohttp.web.Application.
@@ -194,7 +240,7 @@ def main():
         process_host=args.process_host,
         process_port=args.process_port,
         workers=args.workers,
-        timeout=args.timeout
+        timeout=args.timeout,
     )
     # web.run_app:
     # - crea y administra el event loop
@@ -217,10 +263,10 @@ async def scrape_worker(url: str, session: aiohttp.ClientSession, timeout: int) 
 
             if resp.content_length and resp.content_length > 5 * 1024 * 1024:  # > 5 MB
                 raise web.HTTPRequestEntityTooLarge(
-                    text=json.dumps({
-                        "error": f"El contenido es demasiado grande ({resp.content_length} bytes)"
-                    }),
-                    content_type='application/json'
+                    text=json.dumps(
+                        {"error": f"El contenido es demasiado grande ({resp.content_length} bytes)"}
+                    ),
+                    content_type="application/json",
                 )
 
             # Leer el cuerpo de forma asíncrona (no bloqueante).
@@ -257,6 +303,7 @@ async def scrape_worker(url: str, session: aiohttp.ClientSession, timeout: int) 
     # Usamos str(resp.url) para resolver URLs relativas y reflejar redirecciones.
     scraping_data = parse_html_basic(html, base_url=str(resp.url))
     return scraping_data
+
 
 if __name__ == "__main__":
     main()
